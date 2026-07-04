@@ -16,7 +16,16 @@ bl_info = {
 
 def init_bpy():
     import bpy
-    
+    import sys
+
+    # Defensive: if a previous attempt to load SidePanel was interrupted
+    # halfway, Python's sys.modules would still hold a partial module object
+    # without the SidePanel class. Subsequent `from ... import SidePanel`
+    # would silently keep using that broken entry. Drop it so the import
+    # machinery re-reads the file from disk.
+    for _k in [k for k in list(sys.modules) if k.endswith(".SidePanel")]:
+        sys.modules.pop(_k, None)
+
     from .src.BlenderIO.Preferences import AddonPreferences
     from .src.BlenderIO.Import      import ImportGFS, ImportGAP, ImportEPL, ImportPolicies
     from .src.BlenderIO.Import.Menu import GFSImportSubmenu, menu_func_import
@@ -97,6 +106,7 @@ def init_bpy():
     from .src.BlenderIO.UI.Model.PhysicsSubPanel import OBJECT_PT_GFSToolsColliderPanel
     from .src.BlenderIO.UI.RegisterWindow import RegisterWindow
     from .src.BlenderIO.UI.ShaderNodes   import OBJECT_PT_GFSToolsTextureRefPanel, OBJECT_PT_GFSToolsImagePanel
+    from .src.BlenderIO.UI.SidePanel     import SidePanel
     from .src.BlenderIO.Globals          import ErrorLogger
 
     CLASSES = (
@@ -202,6 +212,7 @@ def init_bpy():
     
     MODULES = (
         ErrorLogger,
+        SidePanel,
     )
     
     return CLASSES, PROP_GROUPS, LIST_ITEMS, MODULES
