@@ -20,6 +20,11 @@ NAMESPACE = "gfstools"
 _GAP_FILE_NAME_RE = re.compile(r"^([A-Za-z]+)(\d+)_(\d+)$")
 
 
+def _on_gap_folder_update(self, context):
+    arm = _find_gfs_armature(context) if context is not None else None
+    _refresh_gap_export_items(self, arm)
+
+
 _SCENE_PROPS = (
     ("gfstools_scale_factor",
      bpy.props.FloatProperty(
@@ -57,9 +62,10 @@ _SCENE_PROPS = (
     ("gfstools_gap_folder",
      bpy.props.StringProperty(
          name="GAP Folder",
-         description="Folder of .GAP files (e.g. CHARACTER/0010/FIELD). Empty = export packs already imported on the armature",
+         description="Folder of .GAP files (e.g. CHARACTER/0010/FIELD). Parses AF0010_002 → AF002",
          default="",
-         subtype='DIR_PATH')),
+         subtype='DIR_PATH',
+         update=_on_gap_folder_update)),
 )
 
 
@@ -405,6 +411,87 @@ def _list_gap_files(folder):
     return files
 
 
+class GFSTOOLS_GapExportItem(bpy.types.PropertyGroup):
+    enabled: bpy.props.BoolProperty(
+        name="",
+        description="Export this GAP",
+        default=False,
+    )
+    short_name: bpy.props.StringProperty(name="Short")
+    pack_name: bpy.props.StringProperty(name="GAP")
+    filepath: bpy.props.StringProperty(name="Path", subtype='FILE_PATH')
+
+
+class GFSTOOLS_UL_gap_export(bpy.types.UIList):
+    bl_idname = "GFSTOOLS_UL_gap_export"
+
+    def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index, flt_flag):
+        row = layout.row(align=True)
+        row.prop(item, "enabled", text="")
+        row.label(text=item.short_name)
+        sub = row.row()
+        sub.enabled = False
+        sub.label(text=item.pack_name)
+
+
+def _refresh_gap_export_items(scene, armature=None):
+    if scene is None or not hasattr(scene, "gfstools_gap_items"):
+        return 0
+    folder = (getattr(scene, "gfstools_gap_folder", "") or "").strip()
+    folder = bpy.path.abspath(folder) if folder else ""
+    prev = {item.pack_name: item.enabled for item in scene.gfstools_gap_items}
+    scene.gfstools_gap_items.clear()
+
+    entries = []
+    if folder and os.path.isdir(folder):
+        for filepath in _list_gap_files(folder):
+            pack_name = os.path.splitext(os.path.basename(filepath))[0]
+            entries.append((pack_name, filepath))
+    elif armature is not None and hasattr(armature.data, "GFSTOOLS_ModelProperties"):
+        for pack in armature.data.GFSTOOLS_ModelProperties.animation_packs:
+            if _looks_like_field_gap(pack.name):
+                entries.append((pack.name, ""))
+
+    for pack_name, filepath in entries:
+        item = scene.gfstools_gap_items.add()
+        item.pack_name = pack_name
+        item.short_name = _gap_short_name(pack_name)
+        item.filepath = filepath
+        item.enabled = prev.get(pack_name, False)
+    return len(entries)
+
+
+class GFSTOOLS_OT_gap_refresh(bpy.types.Operator):
+    bl_idname = f"{NAMESPACE}.gap_refresh"
+    bl_label = "Scan"
+    bl_description = "List GAP files in the folder (AF0010_002 → AF002)"
+
+    def execute(self, context):
+        n = _refresh_gap_export_items(context.scene, _find_gfs_armature(context))
+        self.report({'INFO'}, "Found %d GAP(s)" % n)
+        return {'FINISHED'}
+
+
+class GFSTOOLS_OT_gap_select_all(bpy.types.Operator):
+    bl_idname = f"{NAMESPACE}.gap_select_all"
+    bl_label = "All"
+
+    def execute(self, context):
+        for item in context.scene.gfstools_gap_items:
+            item.enabled = True
+        return {'FINISHED'}
+
+
+class GFSTOOLS_OT_gap_select_none(bpy.types.Operator):
+    bl_idname = f"{NAMESPACE}.gap_select_none"
+    bl_label = "None"
+
+    def execute(self, context):
+        for item in context.scene.gfstools_gap_items:
+            item.enabled = False
+        return {'FINISHED'}
+
+
 def _isolate_gap_nla(armature, pack, include_blend=False, include_lookat=False):
     """Put this GAP's existing Actions on NLA. Skip clips whose Action was cleaned out."""
     ad = armature.animation_data_create()
@@ -623,54 +710,59 @@ class GFSTOOLS_OT_batch_export_gap_fbx(bpy.types.Operator):
         os.makedirs(out_dir, exist_ok=True)
 
         char_name = _safe_filename(_character_export_name(context, armature))
-        gap_folder = (getattr(context.scene, "gfstools_gap_folder", "") or "").strip()
+        scene = context.scene
+        if not len(scene.gfstools_gap_items):
+            _refresh_gap_export_items(scene, armature)
+        checked = [item for item in scene.gfstools_gap_items if item.enabled]
+        if not checked:
+            self.report({'ERROR'}, "Tick the GAPs to export (AF002, BF203, …).")
+            return {'CANCELLED'}
+
+        gap_folder = (getattr(scene, "gfstools_gap_folder", "") or "").strip()
         gap_folder = bpy.path.abspath(gap_folder) if gap_folder else ""
 
         mprops = armature.data.GFSTOOLS_ModelProperties
-        job_names = []
+        jobs = []
         imported_names = []
 
-        if gap_folder:
-            files = _list_gap_files(gap_folder)
-            if not files:
-                self.report({'ERROR'}, "No .GAP files in GAP Folder: %s" % gap_folder)
-                return {'CANCELLED'}
-            for filepath in files:
-                filename = os.path.splitext(os.path.basename(filepath))[0]
-                pack = _pack_by_name(armature, filename)
-                if pack is None:
-                    imported, err = _import_gap_onto_armature(context, armature, filepath)
-                    if err:
-                        self.report({'WARNING'}, "Skip %s: %s" % (os.path.basename(filepath), err))
-                        continue
-                    pack = _pack_by_name(armature, imported) or mprops.animation_packs[-1]
-                    imported_names.append(pack.name)
-                job_names.append(pack.name)
-        else:
-            internal_idx = getattr(mprops, "internal_animation_pack_idx", -1)
-            for i, pack in enumerate(mprops.animation_packs):
-                if self.skip_internal and i == internal_idx:
+        for item in checked:
+            filepath = (item.filepath or "").strip()
+            if filepath:
+                filepath = bpy.path.abspath(filepath)
+            if (not filepath or not os.path.isfile(filepath)) and gap_folder:
+                for ext in (".GAP", ".gap"):
+                    candidate = os.path.join(gap_folder, item.pack_name + ext)
+                    if os.path.isfile(candidate):
+                        filepath = candidate
+                        break
+            pack = _pack_by_name(armature, item.pack_name)
+            if pack is None:
+                if not filepath or not os.path.isfile(filepath):
+                    self.report({'WARNING'}, "Skip %s: file not found" % item.short_name)
                     continue
-                if self.skip_internal and not _looks_like_field_gap(pack.name):
+                imported, err = _import_gap_onto_armature(context, armature, filepath)
+                if err:
+                    self.report({'WARNING'}, "Skip %s: %s" % (item.short_name, err))
                     continue
-                job_names.append(pack.name)
+                pack = _pack_by_name(armature, imported) or mprops.animation_packs[-1]
+                imported_names.append(pack.name)
+            jobs.append((pack.name, item.short_name))
 
-        if not job_names:
-            self.report({'ERROR'}, "No GAP packs to export. Import GAPs or set GAP Folder.")
+        if not jobs:
+            self.report({'ERROR'}, "No GAP packs to export.")
             return {'CANCELLED'}
 
         wm = context.window_manager
-        wm.progress_begin(0, len(job_names))
+        wm.progress_begin(0, len(jobs))
         exported = []
         tex_cache = tempfile.mkdtemp(prefix="gfs_unity_tex_")
         try:
-            for i, pack_name in enumerate(job_names):
+            for i, (pack_name, short) in enumerate(jobs):
                 wm.progress_update(i)
                 pack = _pack_by_name(armature, pack_name)
                 if pack is None:
                     self.report({'WARNING'}, "Missing pack %s" % pack_name)
                     continue
-                short = _gap_short_name(pack.name)
                 fbx_path = os.path.join(out_dir, "%s_%s.fbx" % (char_name, short))
                 _isolate_gap_nla(
                     armature,
@@ -792,7 +884,25 @@ class GFSTOOLS_PT_clean_panel(bpy.types.Panel):
         box.label(text="Batch: one FBX per GAP")
         box.prop(scene, "gfstools_char_name")
         box.prop(scene, "gfstools_gap_folder")
-        box.operator(GFSTOOLS_OT_batch_export_gap_fbx.bl_idname, icon='FILE_FOLDER')
+        if scene.gfstools_gap_folder and not len(getattr(scene, "gfstools_gap_items", [])):
+            _refresh_gap_export_items(scene, _find_gfs_armature(context))
+        row = box.row(align=True)
+        row.operator(GFSTOOLS_OT_gap_refresh.bl_idname, icon='FILE_REFRESH')
+        row.operator(GFSTOOLS_OT_gap_select_all.bl_idname)
+        row.operator(GFSTOOLS_OT_gap_select_none.bl_idname)
+        items = getattr(scene, "gfstools_gap_items", [])
+        n_on = sum(1 for item in items if item.enabled)
+        box.label(text="%d / %d  (AF0010_002 → AF002)" % (n_on, len(items)))
+        box.template_list(
+            GFSTOOLS_UL_gap_export.bl_idname,
+            "",
+            scene,
+            "gfstools_gap_items",
+            scene,
+            "gfstools_gap_items_idx",
+            rows=8,
+        )
+        box.operator(GFSTOOLS_OT_batch_export_gap_fbx.bl_idname, icon='EXPORT')
 
         layout.separator()
         col = layout.column(align=True)
@@ -823,8 +933,29 @@ class SidePanel:
         _unregister_stale_class(bpy.types.Operator, GFSTOOLS_OT_clean_actions.bl_idname)
         _unregister_stale_class(bpy.types.Operator, GFSTOOLS_OT_export_fbx_with_png_textures.bl_idname)
         _unregister_stale_class(bpy.types.Operator, GFSTOOLS_OT_batch_export_gap_fbx.bl_idname)
+        _unregister_stale_class(bpy.types.Operator, GFSTOOLS_OT_gap_refresh.bl_idname)
+        _unregister_stale_class(bpy.types.Operator, GFSTOOLS_OT_gap_select_all.bl_idname)
+        _unregister_stale_class(bpy.types.Operator, GFSTOOLS_OT_gap_select_none.bl_idname)
+        for name in ("gfstools_gap_items", "gfstools_gap_items_idx"):
+            if hasattr(bpy.types.Scene, name):
+                delattr(bpy.types.Scene, name)
+        try:
+            bpy.utils.unregister_class(GFSTOOLS_UL_gap_export)
+        except RuntimeError:
+            pass
+        try:
+            bpy.utils.unregister_class(GFSTOOLS_GapExportItem)
+        except RuntimeError:
+            pass
+        bpy.utils.register_class(GFSTOOLS_GapExportItem)
+        bpy.utils.register_class(GFSTOOLS_UL_gap_export)
+        bpy.types.Scene.gfstools_gap_items = bpy.props.CollectionProperty(type=GFSTOOLS_GapExportItem)
+        bpy.types.Scene.gfstools_gap_items_idx = bpy.props.IntProperty(default=0)
         for name, prop in _SCENE_PROPS:
             setattr(bpy.types.Scene, name, prop)
+        bpy.utils.register_class(GFSTOOLS_OT_gap_refresh)
+        bpy.utils.register_class(GFSTOOLS_OT_gap_select_all)
+        bpy.utils.register_class(GFSTOOLS_OT_gap_select_none)
         bpy.utils.register_class(GFSTOOLS_OT_clean_actions)
         bpy.utils.register_class(GFSTOOLS_OT_export_fbx_with_png_textures)
         bpy.utils.register_class(GFSTOOLS_OT_batch_export_gap_fbx)
@@ -832,11 +963,21 @@ class SidePanel:
 
     @classmethod
     def unregister(cls):
+        for name in (
+                "gfstools_gap_items",
+                "gfstools_gap_items_idx"):
+            if hasattr(bpy.types.Scene, name):
+                delattr(bpy.types.Scene, name)
         for class_type in (
                 GFSTOOLS_PT_clean_panel,
                 GFSTOOLS_OT_batch_export_gap_fbx,
                 GFSTOOLS_OT_export_fbx_with_png_textures,
-                GFSTOOLS_OT_clean_actions):
+                GFSTOOLS_OT_clean_actions,
+                GFSTOOLS_OT_gap_select_none,
+                GFSTOOLS_OT_gap_select_all,
+                GFSTOOLS_OT_gap_refresh,
+                GFSTOOLS_UL_gap_export,
+                GFSTOOLS_GapExportItem):
             try:
                 bpy.utils.unregister_class(class_type)
             except RuntimeError:

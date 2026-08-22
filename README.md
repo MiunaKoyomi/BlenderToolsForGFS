@@ -59,8 +59,8 @@ Typical flow:
 
 1. Import the character GMD (e.g. 芳泽霞 / `C0010_004_00`).
 2. Set **Character Name** to `芳泽霞` (or `奥村春`).
-3. Set **GAP Folder** to that character's FIELD dir, e.g. `...\MODEL\CHARACTER\0010\FIELD`. Leave empty to export packs already imported on the armature.
-4. Click **Batch Export GAP FBX** and pick the Unity output folder (e.g. `Assets/Anim/Persona5/Haru Okumura`).
+3. Set **GAP Folder** to that character's FIELD dir, e.g. `...\MODEL\CHARACTER\0010\FIELD`. The sidebar lists every `.GAP` and strips the character id: `AF0010_002` → `AF002`, `BF0010_203` → `BF203`.
+4. Tick the clips you want, then **Batch Export GAP FBX** and pick the Unity output folder (e.g. `Assets/Anim/Persona5/Haru Okumura`).
 
 Each GAP is isolated before export: only that pack's **BASE** clips (+ Rest Pose) go into that FBX. LOOKAT / BLEND are off unless you tick them in the file dialog. Do **not** dump every FIELD anim into one file.
 
