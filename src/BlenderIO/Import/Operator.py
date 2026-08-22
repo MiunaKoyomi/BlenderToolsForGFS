@@ -14,6 +14,12 @@ from ..Globals import ErrorLogger
 from .ImportGFS import import_gfs_object
 from .ImportEPLs import import_epl
 from .ImportAnimations import import_animations
+from .ScaleGFS import rescale_gfs_for_blender
+from ..UI.SidePanel import clean_actions
+
+
+def get_scene_scale_factor(context):
+    return getattr(context.scene, "gfstools_scale_factor", 0.01)
 
 
 def set_fps(self, context):
@@ -87,6 +93,14 @@ class ImportPolicies(bpy.types.PropertyGroup):
         default=False
     )
 
+    scale_factor: bpy.props.FloatProperty(
+        name="Scale Factor",
+        description="Multiply all positions during import. Use 0.01 to convert the GFS cm units to Blender meters (1 BU = 1 m). 1.0 = no rescale",
+        default=1.0,
+        soft_min=0.0001,
+        soft_max=100.0,
+    )
+
 
 class ImportGFS(bpy.types.Operator, ImportHelper):
     bl_idname = 'import_file.import_gfs'
@@ -116,6 +130,7 @@ class ImportGFS(bpy.types.Operator, ImportHelper):
         self.policies.bone_pose            = prefs.bone_pose
         self.policies.connect_child_bones  = prefs.connect_child_bones
         self.policies.anim_boundbox_policy = prefs.anim_boundbox_policy
+        self.policies.scale_factor         = get_scene_scale_factor(context)
         return super().invoke(context, event)
     
     def draw(self, context):
@@ -168,6 +183,7 @@ class ImportGFS(bpy.types.Operator, ImportHelper):
         # Now load the model
         external_textures = self.load_external_textures(filepath)
         filename = os.path.splitext(os.path.split(filepath)[1])[0]
+        rescale_gfs_for_blender(gfs, self.policies.scale_factor)
         import_gfs_object(gfs, raw_gfs, filename, external_textures, errorlog, self.policies)
         
         set_fps(self, context)
@@ -224,6 +240,12 @@ class ImportGAP(bpy.types.Operator, ImportHelper):
                                            default=False,
                                            options={'HIDDEN'},
                                       )
+
+    clean_actions_flag: bpy.props.BoolProperty(
+        name="Clean Actions After Import",
+        description="After importing the GAP, automatically delete actions matching the rules defined in the GFS Tools sidebar (Empty / LOOKAT / root / BLEND)",
+        default=True,
+    )
     
     policies: bpy.props.PointerProperty(type=ImportPolicies)
     
@@ -233,6 +255,7 @@ class ImportGAP(bpy.types.Operator, ImportHelper):
         self.policies.set_fps              = prefs.set_fps
         self.policies.set_clip             = prefs.set_clip
         self.policies.anim_boundbox_policy = prefs.anim_boundbox_policy
+        self.policies.scale_factor         = get_scene_scale_factor(context)
         return super().invoke(context, event)
     
     def draw(self, context):
@@ -281,11 +304,22 @@ class ImportGAP(bpy.types.Operator, ImportHelper):
         
         # Now import file data to Blender
         filename = os.path.splitext(os.path.split(filepath)[1])[0]
+        rescale_gfs_for_blender(gfs, self.policies.scale_factor)
         import_animations(gfs, armature, filename, is_external=True, import_policies=self.policies, errorlog=errorlog)
-        
+
         # Report any warnings that were logged
         errorlog.digest_warnings(self.debug_mode)
-        
+
+        if self.clean_actions_flag:
+            scene = context.scene
+            rm_empty  = getattr(scene, "gfstools_clean_empty",  True)
+            rm_lookat = getattr(scene, "gfstools_clean_lookat", True)
+            rm_root   = getattr(scene, "gfstools_clean_root",   False)
+            rm_blend  = getattr(scene, "gfstools_clean_blend",  False)
+            removed, _skipped = clean_actions(rm_empty, rm_lookat, rm_root, rm_blend)
+            if removed:
+                self.report({"INFO"}, f"Cleaned {removed} action(s) after GAP import.")
+
         set_fps(self, context)
         set_clip(self, context)
         
@@ -343,6 +377,7 @@ class CUSTOM_PT_GFSModelImportSettings(bpy.types.Panel):
         layout.prop(policies, 'merge_vertices')
         layout.prop(policies, 'bone_pose')
         layout.prop(policies, 'connect_child_bones')
+        layout.prop(policies, 'scale_factor')
 
 
 class CUSTOM_PT_GFSModelDeveloperImportSettings(bpy.types.Panel):
@@ -401,6 +436,8 @@ class CUSTOM_PT_GFSAnimImportSettings(bpy.types.Panel):
         layout.prop(policies, 'anim_boundbox_policy')
         layout.prop(policies, 'set_fps')
         layout.prop(policies, 'set_clip')
+        layout.prop(policies, 'scale_factor')
+        layout.prop(operator, 'clean_actions_flag')
 
 
 class ImportEPL(bpy.types.Operator, ImportHelper):

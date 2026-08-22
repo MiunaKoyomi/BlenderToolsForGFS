@@ -62,9 +62,12 @@ def import_materials(gfs, textures, errorlog):
         
         node_pos_data = NodePositioningData()
         node = add_texture_to_material_node(bpy_material, bsdf_node, node_pos_data, textures, "Diffuse Texture", mat.diffuse_texture, mat.texture_indices_1.diffuse,   errorlog)
-        # if node is not None:
-        #     connect(node.outputs["Color"], bsdf_node.inputs["Base Color"])
-        #     connect(node.outputs["Alpha"], bsdf_node.inputs["Alpha"])
+        # Connect diffuse so Blender viewport AND FBX exporters (Unity preview)
+        # actually see a Base Color map. GFS still stores the full texture set
+        # on the named Image Texture nodes; this link is preview-only.
+        # Do not wire Alpha — P5 cutouts would punch holes in Unity Standard.
+        if node is not None:
+            connect(node.outputs["Color"], bsdf_node.inputs["Base Color"])
         
         add_texture_to_material_node(bpy_material, bsdf_node, node_pos_data, textures, "Normal Texture",     mat.normal_texture,     mat.texture_indices_1.normal,     errorlog)
         add_texture_to_material_node(bpy_material, bsdf_node, node_pos_data, textures, "Specular Texture",   mat.specular_texture,   mat.texture_indices_1.specular,   errorlog)

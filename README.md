@@ -17,6 +17,7 @@ You can also access the documentation from within Blender by inspecting the drop
 | Section | Contents |
 |---|---|
 | [Plugin Installation](#plugin-installation) | Important notes on plugin installation beyond regular addon registry. |
+| [Unity FBX preview export](#unity-fbx-preview-export) | Export a Unity-ready FBX with PNG textures from the GFS Tools sidebar. |
 | [Plugin Usage](#plugin-usage) | Important notes on using the plugin. |
 | [Limitations](#limitations) | Plugin limitations. |
 | [Future Development](#future-development) | Notes on the most important features that are missing from the plugin. |
@@ -29,6 +30,19 @@ The plugin comes bundled with documentation. In the source repository, this is j
 - Download the code, and either:
     - Build the LaTeX file from source (out of scope for this README).
     - Unzip the addon, take the `Documentation.pdf` from the latest release, put in the `docs` folder of the downloaded code, zip the addon back up and install it.
+
+## Unity FBX preview export
+
+The GFS Tools sidebar includes **Export FBX with PNG Textures**. Use this when you want a Unity-ready preview of an imported GMD:
+
+- Writes PNG maps into a sibling `{name}.fbm` folder (Unity Import Standard looks there).
+- Bakes all Actions / NLA strips into the FBX.
+- Uses `FBX_SCALE_ALL` so Unity does not treat the file as centimetres and explode skinning.
+- Keeps Blender's native Y-forward / Z-up axes. Goo Engine's `-Z/Y` conversion corrupts `Bip01 Foot` bindposes.
+- Hides `Blur*` outline meshes and temporarily renames meshes that collide with bone names.
+- If the destination is under a Unity `Assets/` folder, the exporter writes/patches the `.fbx.meta` for Import Standard + Local materials + Bake Axis Conversion.
+
+This is a preview path. Round-trip back to GMD/GAP is still the original GFS export.
 
 ## Plugin Usage
 BlenderToolsForGFS makes a few idiomatic choices, such as, but not limited to:
