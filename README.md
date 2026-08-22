@@ -18,6 +18,7 @@ You can also access the documentation from within Blender by inspecting the drop
 |---|---|
 | [Plugin Installation](#plugin-installation) | Important notes on plugin installation beyond regular addon registry. |
 | [Unity FBX preview export](#unity-fbx-preview-export) | Export a Unity-ready FBX with PNG textures from the GFS Tools sidebar. |
+| [Known Unity FBX bugs](#known-unity-fbx-bugs) | What vanilla / Goo / old exporters get wrong, and what this fork fixes. |
 | [Plugin Usage](#plugin-usage) | Important notes on using the plugin. |
 | [Limitations](#limitations) | Plugin limitations. |
 | [Future Development](#future-development) | Notes on the most important features that are missing from the plugin. |
@@ -33,16 +34,52 @@ The plugin comes bundled with documentation. In the source repository, this is j
 
 ## Unity FBX preview export
 
-The GFS Tools sidebar includes **Export FBX with PNG Textures**. Use this when you want a Unity-ready preview of an imported GMD:
+The GFS Tools sidebar has two Unity preview buttons. This is **not** a GMD/GAP round-trip. Game files still use File > Export > GFS.
 
-- Writes PNG maps into a sibling `{name}.fbm` folder (Unity Import Standard looks there).
-- Bakes all Actions / NLA strips into the FBX.
-- Uses `FBX_SCALE_ALL` so Unity does not treat the file as centimetres and explode skinning.
-- Keeps Blender's native Y-forward / Z-up axes. Goo Engine's `-Z/Y` conversion corrupts `Bip01 Foot` bindposes.
+### Export FBX with PNG Textures
+
+Single file. Use this when **one** GAP is already on the character (or you really do want every loaded Action in one FBX).
+
+- Writes PNG maps into a sibling `{name}.fbm` folder (Unity Import Standard looks there). Do **not** use `_textures`.
+- Bakes Actions / NLA strips.
+- `FBX_SCALE_ALL` so Unity does not treat the file as centimetres.
+- Blender native `Y` forward / `Z` up. Unity `Bake Axis Conversion` does the rest.
 - Hides `Blur*` outline meshes and temporarily renames meshes that collide with bone names.
-- If the destination is under a Unity `Assets/` folder, the exporter writes/patches the `.fbx.meta` for Import Standard + Local materials + Bake Axis Conversion.
+- If the destination is under a Unity `Assets/` folder, writes/patches `.fbx.meta`: Import Standard, Local materials, import animation, Bake Axis Conversion.
 
-This is a preview path. Round-trip back to GMD/GAP is still the original GFS export.
+### Batch Export GAP FBX
+
+**One FBX per GAP**, named like the existing Unity library:
+
+- `芳泽霞_BF251.fbx` ← `BF0010_251.GAP`
+- `奥村春_BF251.fbx` / `奥村春_BF253.fbx` ← `BF0010_251.GAP` / `BF0010_253.GAP`
+- `奥村春_AF400.fbx` ← `AF0010_400.GAP`
+
+Typical flow:
+
+1. Import the character GMD (e.g. 芳泽霞 / `C0010_004_00`).
+2. Set **Character Name** to `芳泽霞` (or `奥村春`).
+3. Set **GAP Folder** to that character's FIELD dir, e.g. `...\MODEL\CHARACTER\0010\FIELD`. Leave empty to export packs already imported on the armature.
+4. Click **Batch Export GAP FBX** and pick the Unity output folder (e.g. `Assets/Anim/Persona5/Haru Okumura`).
+
+Each GAP is isolated before export: only that pack's **BASE** clips (+ Rest Pose) go into that FBX. LOOKAT / BLEND are off unless you tick them in the file dialog. Do **not** dump every FIELD anim into one file.
+
+### Known Unity FBX bugs
+
+These are the failures we hit with vanilla Blender / Goo Engine `File > Export > FBX` and with the original plugin (no Unity path). The sidebar exporters above exist because of them.
+
+| Bug | What you see in Unity | Cause | This fork |
+|---|---|---|---|
+| Scale 100× / exploding skin | Bones `lossyScale = 100`, shoes or feet blow up when skinned | Goo `FBX_SCALE_NONE` writes `UnitScaleFactor = 0.01`. Unity treats that as centimetres and compensates on the skeleton | `apply_scale_options='FBX_SCALE_ALL'` so file scale is 1 |
+| One heel stretched | Left/right `Bip01 Foot` bindposes stop mirroring; heel weights pull one shoe | Goo `-Z` forward / `Y` up rewrites Foot bindposes incorrectly | Export Blender `Y`/`Z` axes; Unity bakes the conversion |
+| Pink / white materials | 0 textures on every slot | PNG dumped to `{name}_textures`, or Unity **On Demand Remap** which ignores PNG | Copy into `{name}.fbm` + `path_mode='COPY'`; `.meta` **Import Standard** + **Local** |
+| Diffuse not on Standard | Lit grey even when PNG exist | GFS materials leave Principled **Base Color** unconnected | Connect Diffuse → Base Color (never Alpha — P5 cutouts punch holes) |
+| No clips / every GAP in one FBX | One giant take, or Rest Pose only | `bake_anim=False`, or `bake_anim_use_all_actions` with every FIELD GAP loaded | Single export bakes actions; **batch** writes `角色_BF251.fbx`, `角色_BF253.fbx`, … |
+| Blur outline as geometry | Extra meshes, stretching silhouettes | `Blur*` toon outlines exported as real meshes | Hidden during export (`use_visible=True`) |
+| Mesh/bone name clash | Wrong node, missing skin | FBX cannot store a mesh and a bone with the same name | Temporary `{name}__mesh` rename |
+| `gfdDefaultMat0` empty | 4 helper slots with no map | Elbow/knee helper meshes have no diffuse in GFS | Not a bug; leave them |
+
+Verified on 芳泽霞: current exporter `Kasumi.fbx` has 21/25 textured slots, 4 BASE clips, uniform scale 1. The original-plugin `芳泽霞_BF251.fbx` had 0 textures and skeleton scale 100 (world size only matched because mesh was 0.01×).
 
 ## Plugin Usage
 BlenderToolsForGFS makes a few idiomatic choices, such as, but not limited to:
